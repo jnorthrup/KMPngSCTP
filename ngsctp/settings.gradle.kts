@@ -14,6 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ngsctp"
-include(":src/commonMain")
-include(":src/jvmMain")
+rootProject.name = "KMPngSCTP"
+include(":ngsctp")
