@@ -1,6 +1,7 @@
 plugins {
     kotlin("multiplatform")
     kotlin("plugin.serialization")
+    id("com.google.devtools.ksp")
 }
 
 kotlin {
@@ -35,6 +36,13 @@ kotlin {
                 
                 // kotlin-spirit-parser for zero-copy TLV parsing
                 api("dev.jnorthrup:kotlin-spirit-parser:2.5.0")
+            }
+        }
+        
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
             }
         }
         

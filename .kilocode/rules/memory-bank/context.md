@@ -19,6 +19,8 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 - [x] Implemented TLV chunk system with Spirit parser
 - [x] Added ML congestion model slot (TinyONNX/TFLite placeholder)
 - [x] Created protocol.md documentation
+- [x] Fixed transport filename typo (Iouing -> IoUring)
+- [x] Added unit test structure with ChunkTest.kt (7 tests)
 
 ## Current Structure
 
@@ -35,6 +37,7 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 | `ngsctp/src/commonMain/kotlin/SctpTypes.kt` | Legacy protocol definitions | ✅ Kept for compatibility |
 | `ngsctp/src/commonMain/kotlin/SctpEngine.kt` | Legacy engine | ✅ Kept for compatibility |
 | `ngsctp/src/jvmMain/kotlin/IoUringSctpTransport.kt` | io_uring transport | ✅ Framework ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/ChunkTest.kt` | Unit tests | ✅ Ready |
 | `docs/protocol.md` | Protocol specification | ✅ Ready |
 
 ## Technical Stack
@@ -80,6 +83,7 @@ class NgSctpStream : CoroutineScope {
 | Initial | Template created with base setup |
 | 2026-03-10 | Converted to KMP ngSCTP project with coroutines and io_uring |
 | 2026-03-10 | v0.1.0 foundation: NgSctpStream, NgSctpAssociation, TLV chunks, Spirit parser, ML slot |
+| 2026-03-10 | Enhanced: Fixed transport filename typo, added unit tests |
 
 ## Next Steps (from user request)
 

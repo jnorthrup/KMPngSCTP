@@ -1,6 +1,6 @@
-package com.ngsctp.protocol.io
+package dev.jnorthrup.ngsctp.transport
 
-import com.ngsctp.protocol.*
+import dev.jnorthrup.ngsctp.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
