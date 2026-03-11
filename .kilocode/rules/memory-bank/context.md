@@ -21,6 +21,9 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 - [x] Created protocol.md documentation
 - [x] Fixed transport filename typo (Iouing -> IoUring)
 - [x] Added unit test structure with ChunkTest.kt (7 tests)
+- [x] Added SCTP packet serialization with common header (12 bytes)
+- [x] Implemented serializeAndTransmit with CRC32c checksum
+- [x] Added PacketTest.kt with wire format tests
 
 ## Current Structure
 
@@ -38,6 +41,7 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 | `ngsctp/src/commonMain/kotlin/SctpEngine.kt` | Legacy engine | ✅ Kept for compatibility |
 | `ngsctp/src/jvmMain/kotlin/IoUringSctpTransport.kt` | io_uring transport | ✅ Framework ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/ChunkTest.kt` | Unit tests | ✅ Ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/PacketTest.kt` | Wire format tests | ✅ Ready |
 | `docs/protocol.md` | Protocol specification | ✅ Ready |
 
 ## Technical Stack
@@ -84,14 +88,16 @@ class NgSctpStream : CoroutineScope {
 | 2026-03-10 | Converted to KMP ngSCTP project with coroutines and io_uring |
 | 2026-03-10 | v0.1.0 foundation: NgSctpStream, NgSctpAssociation, TLV chunks, Spirit parser, ML slot |
 | 2026-03-10 | Enhanced: Fixed transport filename typo, added unit tests |
+| 2026-03-11 | Enhanced: Added SCTP packet serialization with CRC32c checksum |
 
 ## Next Steps (from user request)
 
-1. Full `NgSctpAssociation` + handshake - **IN PROGRESS**
-2. io_uring + eBPF XDP channel router
-3. ML congestion model slot (ONNX inference)
-4. Native Linux implementation (posix + CMT)
-5. Demo app
+1. Full `NgSctpAssociation` + handshake - ✅ COMPLETE
+2. Wire format serialization - ✅ COMPLETE
+3. io_uring + eBPF XDP channel router
+4. ML congestion model slot (ONNX inference)
+5. Native Linux implementation (posix + CMT)
+6. Demo app
 
 ## Quick Start
 
