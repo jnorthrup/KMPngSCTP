@@ -53,10 +53,25 @@ class NgSctpAssociation private constructor(
     var outboundStreamCount: UShort = 10u
     var inboundStreamCount: UShort = 10u
 
+    /** Congestion control */
+    private val congestionControl = CongestionControl()
+    
+    /** Send buffer for tracking outstanding DATA chunks */
+    private val sendBuffer = SendBuffer()
+    
+    /** Heartbeat manager for connection monitoring */
+    private val heartbeatManager = HeartbeatManager(scope)
+
     init {
         // Start the transmit and receive loops
         scope.launch { transmitLoop() }
         scope.launch { receiveLoop() }
+        // Start heartbeat after establishment
+        scope.launch {
+            // Wait for association to be established
+            // TODO: wait for state change
+            // heartbeatManager.start()
+        }
     }
 
     companion object {
@@ -190,6 +205,29 @@ class NgSctpAssociation private constructor(
         check(isActive) { "Association is not active" }
         outboundChunks.send(chunk)
     }
+    
+    /**
+     * Send DATA on a specific stream
+     */
+    suspend fun sendData(streamId: UShort, data: ByteBuffer, payloadProtocolId: UInt = 0u) {
+        check(state == AssociationState.ESTABLISHED) { "Association not established" }
+        
+        val dataBytes = ByteArray(data.remaining())
+        data.get(dataBytes)
+        
+        // Get TSN from send buffer
+        val tsn = sendBuffer.addChunk(dataBytes, streamId, 0u)
+        
+        val chunk = NgChunk_Data(
+            streamId = streamId,
+            streamSequenceNumber = 0u,
+            payloadProtocolId = payloadProtocolId,
+            transmissionSequenceNumber = tsn,
+            userData = ByteBuffer.wrap(dataBytes)
+        )
+        
+        outboundChunks.send(chunk)
+    }
 
     /**
      * Close the association gracefully
@@ -211,7 +249,11 @@ class NgSctpAssociation private constructor(
             remotePort = remotePort,
             state = state,
             streams = streams.size,
-            nextTSN = nextTSN
+            nextTSN = nextTSN,
+            cwnd = congestionControl.cwnd,
+            ssthresh = congestionControl.currentSsthresh,
+            bytesInFlight = sendBuffer.bytesInFlight,
+            outstandingChunks = sendBuffer.outstandingCount
         )
 
     // ============================================
@@ -234,6 +276,7 @@ class NgSctpAssociation private constructor(
                 is NgChunk_Data -> deliverToStream(chunk)
                 is NgChunk_Sack -> handleSack(chunk)
                 is NgChunk_Heartbeat -> sendHeartbeatAck(chunk)
+                is NgChunk_HeartbeatAck -> handleHeartbeatAck(chunk)
                 is NgChunk_Abort -> handleAbort(chunk)
                 is NgChunk_Error -> handleError(chunk)
                 is NgChunk_Shutdown -> handleShutdown(chunk)
@@ -317,12 +360,45 @@ class NgSctpAssociation private constructor(
     }
 
     private fun handleSack(sack: NgChunk_Sack) {
+        val previousAck = lastAckedTSN
         lastAckedTSN = sack.cumulativeTSNAck
-        // Update congestion control state
+        
+        // Parse gap ack blocks from SACK if available
+        // (The current NgChunk_Sack parser doesn't extract gap acks, 
+        // but we'd integrate them here if it did)
+        val gapAcks = emptyList<Pair<UInt, UInt>>() // Would parse from sack.gapAckBlocks
+        
+        // Update send buffer with acknowledged chunks
+        val ackedChunks = sendBuffer.ackChunks(sack.cumulativeTSNAck, gapAcks)
+        
+        // Notify streams of acked data
+        for (chunk in ackedChunks) {
+            // Stream-level ACK notification could go here
+        }
+        
+        // Update congestion control
+        congestionControl.onSackReceived(
+            cumulativeAckTSN = sack.cumulativeTSNAck,
+            previousAckTSN = previousAck,
+            gapAckBlocks = gapAcks,
+            dataBytesInFlight = sendBuffer.bytesInFlight
+        )
+        
+        // If duplicate SACK (no advance), trigger fast retransmit
+        if (sack.cumulativeTSNAck == previousAck) {
+            congestionControl.onDuplicateSack()
+        }
     }
 
     private suspend fun sendHeartbeatAck(heartbeat: NgChunk_Heartbeat) {
         sendChunk(NgChunk_HeartbeatAck(heartbeat.info))
+    }
+    
+    /**
+     * Handle incoming heartbeat ack
+     */
+    private fun handleHeartbeatAck(heartbeatAck: NgChunk_HeartbeatAck) {
+        heartbeatManager.onHeartbeatAck()
     }
 
     private fun handleAbort(abort: NgChunk_Abort) {
@@ -454,7 +530,11 @@ data class AssociationInfo(
     val remotePort: Int,
     val state: AssociationState,
     val streams: Int,
-    val nextTSN: UInt
+    val nextTSN: UInt,
+    val cwnd: Int = 0,
+    val ssthresh: Int = 0,
+    val bytesInFlight: Int = 0,
+    val outstandingChunks: Int = 0
 )
 
 /**
