@@ -35,7 +35,9 @@ enum class ChunkType(val value: UByte) {
     FORWARD_TSN(0xC0),
     I_DATA(0xD0),
     ASCONF_ACK(0x80),
-    ASCONF(0x81);
+    ASCONF(0x81),
+    // RFC 4895 - SCTP Authentication
+    AUTH(0x0F);
 
     companion object {
         fun fromByte(b: UByte): ChunkType? = entries.find { it.value == b }
@@ -78,6 +80,7 @@ sealed interface NgChunk {
     typealias ShutdownAck = NgChunk_ShutdownAck
     typealias Abort = NgChunk_Abort
     typealias Error = NgChunk_Error
+    typealias Auth = NgChunk_Auth
     
     companion object {
         /**
@@ -101,6 +104,7 @@ sealed interface NgChunk {
                 ChunkType.SACK -> parseSackChunk(buffer, length)
                 ChunkType.COOKIE_ECHO -> parseCookieEcho(buffer, length)
                 ChunkType.COOKIE_ACK -> NgChunk.CookieAck
+                ChunkType.AUTH -> NgChunk_Auth.parse(buffer, length)
                 ChunkType.HEARTBEAT -> parseHeartbeat(buffer, length)
                 ChunkType.HEARTBEAT_ACK -> parseHeartbeatAck(buffer, length)
                 ChunkType.SHUTDOWN -> parseShutdown(buffer, length)
@@ -592,4 +596,119 @@ sealed class SctpParameter {
     }
     
     data class Unknown(override val type: ParameterType, override val data: ByteArray) : SctpParameter()
+}
+
+/**
+ * SCTP Authentication Chunk (RFC 4895)
+ * 
+ * Provides integrity and authentication for SCTP packets using
+ * HMAC-SHA1 or other algorithms.
+ */
+class NgChunk_Auth(
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** Authentication Key Identifier (shared secret ID) */
+    val keyId: UShort = 0u,
+    /** HMAC Algorithm Identifier */
+    val algorithm: AuthAlgorithm = AuthAlgorithm.HMAC_SHA_1,
+    /** HMAC value (variable length, typically 20 bytes for SHA1) */
+    val hmac: ByteArray = ByteArray(20)
+) : NgChunk {
+    
+    override val type: ChunkType = ChunkType.AUTH
+    
+    /** Supported HMAC algorithms */
+    enum class AuthAlgorithm(val value: UShort) {
+        HMAC_SHA_1(1u),
+        HMAC_SHA_256(3u);
+        
+        companion object {
+            fun fromUShort(v: UShort): AuthAlgorithm = 
+                entries.find { it.value == v } ?: HMAC_SHA_1
+        }
+    }
+    
+    override fun serialize(): ByteArray {
+        // 4 byte header + 2 byte key ID + 2 byte algorithm + HMAC
+        val length = 4 + 2 + 2 + hmac.size
+        val paddedLength = (length + 3) and 0xFFFFFFFC.toInt() // 4-byte aligned
+        
+        val buffer = ByteBuffer.allocate(paddedLength)
+        buffer.put(type.value.toByte())
+        buffer.put(flags.value.toByte())
+        buffer.putShort(paddedLength.toShort())
+        buffer.putShort(keyId.toShort())
+        buffer.putShort(algorithm.value.toShort())
+        buffer.put(hmac)
+        
+        // Padding
+        while (buffer.position() < paddedLength) {
+            buffer.put(0)
+        }
+        
+        return buffer.array()
+    }
+    
+    companion object {
+        /** Parse AUTH chunk from buffer */
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_Auth {
+            val keyId = buffer.getShort().toUShort()
+            val algorithm = AuthAlgorithm.fromUShort(buffer.getShort().toUShort())
+            
+            val hmacLength = length.toInt() - 8 // minus keyId (2) + algorithm (2) + header (4)
+            val hmac = ByteArray(hmacLength.coerceAtLeast(0))
+            buffer.get(hmac)
+            
+            // Skip padding
+            val paddedLength = (length.toInt() + 3) and 0xFFFFFFFC.toInt()
+            val skip = paddedLength - length.toInt()
+            repeat(skip) { buffer.get() }
+            
+            return NgChunk_Auth(
+                keyId = keyId,
+                algorithm = algorithm,
+                hmac = hmac
+            )
+        }
+    }
+}
+
+/**
+ * Authentication Parameters for SCTP (RFC 4895)
+ */
+sealed class AuthParameter {
+    abstract val type: AuthParameterType
+    abstract val data: ByteArray
+    
+    /** Random Number - used as part of key generation */
+    data class Random(val randomData: ByteArray) : AuthParameter() {
+        override val type = AuthParameterType.RANDOM
+        override val data = randomData
+    }
+    
+    /** Chunk List - specifies which chunks require authentication */
+    data class ChunkList(val chunkTypes: List<UByte>) : AuthParameter() {
+        override val type = AuthParameterType.CHUNK_LIST
+        override val data = chunkTypes.map { it.toByte() }.toByteArray()
+    }
+    
+    /** Shared Key Identifier */
+    data class SharedKey(val keyId: UShort, val sharedKey: ByteArray) : AuthParameter() {
+        override val type = AuthParameterType.SHARED_KEY
+        override val data = byteArrayOf(
+            (keyId.toInt() shr 8).toByte(),
+            keyId.toByte()
+        ) + sharedKey
+    }
+}
+
+/** Authentication Parameter Types */
+enum class AuthParameterType(val value: UShort) {
+    RANDOM(0x0001),
+    CHUNK_LIST(0x0002),
+    SHARED_KEY(0x0003),
+    HMAC_ALGORITHM(0x0004);
+    
+    companion object {
+        fun fromUShort(v: UShort): AuthParameterType? = entries.find { it.value == v }
+    }
 }

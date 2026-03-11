@@ -31,8 +31,6 @@ class CongestionControl(
     private val _phase: AtomicReference<CongestionPhase> = AtomicReference(CongestionPhase.SLOW_START),
     /** ML predictor for hybrid mode (optional) */
     private var mlPredictor: dev.jnorthrup.ngsctp.ml.CongestionPredictor? = null,
-    /** Whether to use ML predictions */
-    private val useML: Boolean = false,
     /** RTT tracking */
     private val _rtt: AtomicLong = AtomicLong(0),
     private val _rttVariance: AtomicLong = AtomicLong(0),
@@ -88,9 +86,18 @@ class CongestionControl(
     }
     
     /** Enable/disable ML predictions */
+    private var _useML: Boolean = false
+    
     fun setUseML(enabled: Boolean) {
         // Cannot enable ML without a predictor
+        if (enabled && mlPredictor == null) {
+            _useML = false
+        } else {
+            _useML = enabled
+        }
     }
+    
+    fun isUseMLEnabled(): Boolean = _useML
     
     /**
      * Update RTT measurement (called when ACK arrives for sent data)
@@ -153,7 +160,7 @@ class CongestionControl(
      */
     fun bytesAllowedToSend(outstandingBytes: Int): Int {
         // If ML is enabled and we have a predictor, use it
-        if (useML && mlPredictor != null) {
+        if (_useML && mlPredictor != null) {
             val features = buildFeatures(outstandingBytes)
             val mlCwnd = mlPredictor!!.predictCwnd(features).toInt()
             val available = mlCwnd - outstandingBytes
@@ -279,7 +286,7 @@ class CongestionControl(
     }
     
     override fun toString(): String {
-        return "CongestionControl(cwnd=$cwnd, ssthresh=$ssthresh, phase=$phase)"
+        return "CongestionControl(cwnd=$cwnd, ssthresh=$ssthresh, phase=$phase, useML=$_useML)"
     }
 }
 
