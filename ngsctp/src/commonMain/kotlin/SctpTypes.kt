@@ -115,6 +115,31 @@ data class SctpCommonHeader(
 ) {
     companion object {
         const val SIZE = 12
+        
+        /** Parse from ByteBuffer */
+        fun parse(buffer: java.nio.ByteBuffer): SctpCommonHeader {
+            return SctpCommonHeader(
+                sourcePort = buffer.getShort().toUShort(),
+                destinationPort = buffer.getShort().toUShort(),
+                verificationTag = buffer.getInt().toUInt(),
+                checksum = buffer.getInt().toUInt()
+            )
+        }
+    }
+    
+    /** Serialize to ByteBuffer */
+    fun serialize(buffer: java.nio.ByteBuffer) {
+        buffer.putShort(sourcePort.toShort())
+        buffer.putShort(destinationPort.toShort())
+        buffer.putInt(verificationTag.toInt())
+        buffer.putInt(checksum.toInt())
+    }
+    
+    /** Serialize to ByteArray */
+    fun serialize(): ByteArray {
+        val buffer = java.nio.ByteBuffer.allocate(SIZE)
+        serialize(buffer)
+        return buffer.array()
     }
 }
 

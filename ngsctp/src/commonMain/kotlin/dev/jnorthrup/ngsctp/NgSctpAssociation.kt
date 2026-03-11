@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
 import java.net.InetSocketAddress
+import java.nio.ByteBuffer
 
 /**
  * ngSCTP Association - The core connection entity
@@ -91,7 +92,7 @@ class NgSctpAssociation private constructor(
             }
 
             // Step 1: Send INIT
-            assoc.sendChunk(NgChunk.Init(
+            assoc.sendChunk(NgChunk_Init(
                 initiateTag = localTag,
                 initialTSN = assoc.initialTSN,
                 numOutboundStreams = outboundStreams,
@@ -104,18 +105,18 @@ class NgSctpAssociation private constructor(
 
             // Step 2: Wait for INIT-ACK with cookie
             val initAck = withTimeoutOrNull(3000) {
-                assoc.inboundChunks.receive() as? NgChunk.InitAck
+                assoc.inboundChunks.receive() as? NgChunk_InitAck
             } ?: throw ConnectionException("INIT-ACK timeout")
 
             assoc.remoteVerificationTag = initAck.initiateTag
             assoc.state = AssociationState.COOKIE_ECHOED
 
             // Step 3: Send COOKIE_ECHO with the received cookie
-            assoc.sendChunk(NgChunk.CookieEcho(initAck.cookie))
+            assoc.sendChunk(NgChunk_CookieEcho(initAck.cookie))
 
             // Step 4: Wait for COOKIE_ACK
             withTimeoutOrNull(1000) {
-                assoc.inboundChunks.receive() as? NgChunk.CookieAck
+                assoc.inboundChunks.receive() as? NgChunk_CookieAck
             } ?: throw ConnectionException("COOKIE_ACK timeout")
 
             assoc.state = AssociationState.ESTABLISHED
@@ -125,7 +126,7 @@ class NgSctpAssociation private constructor(
         /**
          * Accept an incoming connection (server-side)
          */
-        suspend fun accept(init: NgChunk.Init, cookie: ByteArray): NgSctpAssociation = coroutineScope {
+        suspend fun accept(init: NgChunk_Init, cookie: ByteArray): NgSctpAssociation = coroutineScope {
             val localTag = generateVerificationTag()
             val assocScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
             
@@ -182,7 +183,7 @@ class NgSctpAssociation private constructor(
      */
     suspend fun close() {
         state = AssociationState.SHUTDOWN_PENDING
-        sendChunk(NgChunk.Shutdown(nextTSN - 1u))
+        sendChunk(NgChunk_Shutdown(nextTSN - 1u))
         // Wait for SHUTDOWN_ACK
         state = AssociationState.SHUTDOWN_SENT
         cancel("Association closed")
@@ -207,8 +208,6 @@ class NgSctpAssociation private constructor(
     private fun transmitLoop() = scope.launch {
         for (chunk in outboundChunks) {
             // Serialize and transmit via transport layer
-            // In jvmMain, this goes to io_uring
-            // In nativeMain, this goes to raw sockets
             serializeAndTransmit(chunk)
         }
     }
@@ -217,41 +216,136 @@ class NgSctpAssociation private constructor(
         // Process incoming chunks
         for (chunk in inboundChunks) {
             when (chunk) {
-                is NgChunk.Data -> deliverToStream(chunk)
-                is NgChunk.Sack -> handleSack(chunk)
-                is NgChunk.Heartbeat -> sendHeartbeatAck(chunk)
-                is NgChunk.Abort -> handleAbort(chunk)
-                is NgChunk.Error -> handleError(chunk)
+                is NgChunk_Data -> deliverToStream(chunk)
+                is NgChunk_Sack -> handleSack(chunk)
+                is NgChunk_Heartbeat -> sendHeartbeatAck(chunk)
+                is NgChunk_Abort -> handleAbort(chunk)
+                is NgChunk_Error -> handleError(chunk)
                 else -> { /* Handle other chunk types */ }
             }
         }
     }
 
-    private fun deliverToStream(data: NgChunk.Data) {
+    private fun deliverToStream(data: NgChunk_Data) {
         val stream = streams[data.streamId.toInt()] ?: return
         stream.receiveChannel.trySend(data.userData)
     }
 
-    private fun handleSack(sack: NgChunk.Sack) {
+    private fun handleSack(sack: NgChunk_Sack) {
         lastAckedTSN = sack.cumulativeTSNAck
         // Update congestion control state
     }
 
-    private suspend fun sendHeartbeatAck(heartbeat: NgChunk.Heartbeat) {
-        sendChunk(NgChunk.HeartbeatAck(heartbeat.info))
+    private suspend fun sendHeartbeatAck(heartbeat: NgChunk_Heartbeat) {
+        sendChunk(NgChunk_HeartbeatAck(heartbeat.info))
     }
 
-    private fun handleAbort(abort: NgChunk.Abort) {
+    private fun handleAbort(abort: NgChunk_Abort) {
         cancel("Association aborted: ${abort.errorInfo}")
     }
 
-    private fun handleError(error: NgChunk.Error) {
+    private fun handleError(error: NgChunk_Error) {
         // Log error
     }
 
-    // Placeholder - actual transport implementation in platform-specific code
+    /**
+     * Serialize chunk to wire format with SCTP common header
+     * 
+     * Wire format:
+     * [12 bytes: Common Header] [Chunks...]
+     */
     private suspend fun serializeAndTransmit(chunk: NgChunk) {
-        // Platform-specific: jvmMain uses io_uring, nativeMain uses raw sockets
+        // Build the packet: common header + chunk
+        val chunkBytes = chunk.serialize()
+        
+        // Calculate total size
+        val totalSize = SctpCommonHeader.SIZE + chunkBytes.size
+        val buffer = ByteBuffer.allocate(totalSize)
+        
+        // Write common header
+        val header = SctpCommonHeader(
+            sourcePort = localPort.toUShort(),
+            destinationPort = remotePort.toUShort(),
+            verificationTag = localVerificationTag,
+            checksum = 0u // CRC32c calculated below
+        )
+        header.serialize(buffer)
+        
+        // Write chunk data
+        buffer.put(chunkBytes)
+        
+        // Calculate and insert CRC32c checksum
+        buffer.flip()
+        val checksum = calculateCrc32c(buffer)
+        buffer.position(8) // Position at checksum field
+        buffer.putInt(checksum.toInt())
+        
+        // TODO: Actually send via transport (io_uring in jvmMain, raw sockets in nativeMain)
+        // For now, log what would be sent
+        println("Would send ${chunkBytes.size} byte chunk to $remoteAddress:$remotePort")
+    }
+    
+    /**
+     * Parse inbound packet (common header + chunks)
+     */
+    fun parseInboundPacket(data: ByteArray) {
+        val buffer = ByteBuffer.wrap(data)
+        
+        // Parse common header
+        val header = SctpCommonHeader.parse(buffer)
+        
+        // Verify checksum
+        val receivedChecksum = header.checksum
+        // Zero checksum field for calculation
+        buffer.position(8)
+        buffer.putInt(0)
+        buffer.position(0)
+        val calculatedChecksum = calculateCrc32c(buffer)
+        
+        if (receivedChecksum != calculatedChecksum) {
+            println("Checksum mismatch: got $receivedChecksum, expected $calculatedChecksum")
+            return
+        }
+        
+        // Verify verification tag
+        if (header.verificationTag != remoteVerificationTag) {
+            println("Verification tag mismatch")
+            return
+        }
+        
+        // Parse chunks
+        while (buffer.hasRemaining()) {
+            val chunk = NgChunk.parse(buffer)
+            if (chunk != null) {
+                // TODO: Send to inboundChunks channel
+                println("Received chunk: ${chunk.type}")
+            }
+        }
+    }
+    
+    /**
+     * CRC32c (Castagnoli) checksum calculation
+     * Used for SCTP-advertised receiver window credit
+     */
+    private fun calculateCrc32c(buffer: ByteBuffer): UInt {
+        // CRC32c polynomial: 0x1EDC6F41
+        // For production, use java.util.zip.CRC32C
+        var crc = 0xFFFFFFFFu
+        val polynomial = 0x1EDC6F41u
+        
+        while (buffer.hasRemaining()) {
+            val byte = buffer.get().toUByte()
+            crc = crc xor (byte.toUInt() shl 24)
+            repeat(8) {
+                if ((crc and 0x80000000u) != 0u) {
+                    crc = (crc shl 1) xor polynomial
+                } else {
+                    crc = crc shl 1
+                }
+            }
+        }
+        
+        return crc xor 0xFFFFFFFFu
     }
 }
 
