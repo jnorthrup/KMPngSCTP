@@ -67,6 +67,35 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - buildFeatures() for ML feature extraction
   - ML-aware bytesAllowedToSend()
 - [x] Added CongestionModelTest.kt with 11 tests
+- [x] Added SCTP AUTH chunk (RFC 4895)
+  - NgChunk_Auth with HMAC-SHA1/SHA256 support
+  - AuthAlgorithm enum
+  - AuthParameter types (Random, ChunkList, SharedKey)
+  - AUTH chunk parsing in NgChunk.parse()
+- [x] Added AuthChunkTest.kt with 9 comprehensive tests
+  - Serialization tests for SHA1 and SHA256
+  - Parsing tests
+  - Round-trip serialization/parsing tests
+  - Algorithm enum tests
+  - 4-byte alignment verification
+- [x] Fixed NgSctpAssociation.accept() missing parameters bug
+  - Added localAddr, remoteAddr, transport parameters
+- [x] Added complete RFC 4960 shutdown handshake
+  - handleShutdownAck() for peer-initiated shutdown
+  - handleShutdownComplete() for shutdown completion
+- [x] Added NgChunk_ShutdownComplete with T-bit flag support
+- [x] Added NgChunk_ForwardTsn for RFC 3758 partial reliability (PR-SCTP)
+  - StreamMapping for reordered streams
+  - Full serialization and parsing support
+- [x] Added RTT tracking to CongestionControl
+  - updateRTT() for RTT measurements
+  - Exponential moving average for RTT and variance
+  - Loss rate tracking
+- [x] Added ML predictor integration to CongestionControl
+  - setMLPredictor() for hybrid mode
+  - buildFeatures() for ML feature extraction
+  - ML-aware bytesAllowedToSend()
+- [x] Added CongestionModelTest.kt with 11 tests
 - [x] Fixed CongestionControl ML mode toggle
   - Added _useML mutable field with proper getter/setter
   - isUseMLEnabled() method
