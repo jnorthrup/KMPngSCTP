@@ -86,6 +86,9 @@ sealed interface NgChunk {
     typealias Ecne = NgChunk_Ecne
     typealias Cwr = NgChunk_Cwr
     typealias ReConfig = NgChunk_ReConfig
+    typealias Asconf = NgChunk_Asconf
+    typealias AsconfAck = NgChunk_AsconfAck
+    typealias IData = NgChunk_IData
     
     companion object {
         /**
@@ -119,6 +122,9 @@ sealed interface NgChunk {
                 ChunkType.ECNE -> NgChunk_Ecne.parse(buffer, length)
                 ChunkType.CWR -> NgChunk_Cwr.parse(buffer, length)
                 ChunkType.RE_CONFIG -> NgChunk_ReConfig.parse(buffer, length)
+                ChunkType.ASCONF -> NgChunk_Asconf.parse(buffer, length)
+                ChunkType.ASCONF_ACK -> NgChunk_AsconfAck.parse(buffer, length)
+                ChunkType.I_DATA -> NgChunk_IData.parse(buffer, length)
                 ChunkType.ABORT -> parseAbort(buffer, length)
                 ChunkType.ERROR -> parseError(buffer, length)
                 else -> null  // Skip unknown chunks
@@ -880,11 +886,13 @@ data class NgChunk_Cwr(
  * Allows SCTP endpoints to dynamically add or reset streams
  * without closing the association.
  */
-data class NgChunk_ReConfig(
+data data class NgChunk_ReConfig(
     override val type: ChunkType = ChunkType.RE_CONFIG,
     override val flags: ChunkFlags = ChunkFlags.empty(),
     /** Reconfiguration requests */
-    val requests: List<ReConfigRequest> = emptyList()
+    val requests: List<ReConfigRequest> = emptyList(),
+    /** Reconfiguration responses (for responding to peer's requests) */
+    val responses: List<ReConfigResponse> = emptyList()
 ) : NgChunk {
     
     /** Reconfiguration request types */
@@ -896,28 +904,93 @@ data class NgChunk_ReConfig(
         RESET_INCOMING(0x05)
     }
     
+    /** Reconfiguration result codes */
+    enum class ReConfigResult(val value: UShort) {
+        SUCCESS(0x00),
+        IN_PROGRESS(0x01),
+        DENIED(0x02),
+        ERROR_NO_EXIST(0x03),
+        ERROR_BAD_SEQ(0x04),
+        ERROR_IN_PROGRESS(0x05),
+        ERROR_DENIED(0x06)
+    }
+    
     /** Reconfiguration request parameter */
-    data class ReConfigRequest(
-        val type: ReConfigType,
-        val streamIds: List<UShort> = emptyList(),
-        val requestSequenceNumber: UInt = 0u
+    sealed class ReConfigRequest {
+        abstract val requestType: ReConfigType
+        abstract val streamIds: List<UShort>
+        abstract val requestSequenceNumber: UInt
+        
+        data class AddOutbound(
+            override val streamIds: List<UShort> = emptyList(),
+            override val requestSequenceNumber: UInt = 0u
+        ) : ReConfigRequest() {
+            override val requestType: ReConfigType = ReConfigType.ADD_OUTBOUND
+        }
+        
+        data class AddInbound(
+            override val streamIds: List<UShort> = emptyList(),
+            override val requestSequenceNumber: UInt = 0u
+        ) : ReConfigRequest() {
+            override val requestType: ReConfigType = ReConfigType.ADD_INBOUND
+        }
+        
+        data class StreamReset(
+            override val streamIds: List<UShort> = emptyList(),
+            override val requestSequenceNumber: UInt = 0u
+        ) : ReConfigRequest() {
+            override val requestType: ReConfigType = ReConfigType.STREAM_RESET
+        }
+        
+        data class ResetOutgoing(
+            override val streamIds: List<UShort> = emptyList(),
+            override val requestSequenceNumber: UInt = 0u
+        ) : ReConfigRequest() {
+            override val requestType: ReConfigType = ReConfigType.RESET_OUTGOING
+        }
+        
+        data class ResetIncoming(
+            override val streamIds: List<UShort> = emptyList(),
+            override val requestSequenceNumber: UInt = 0u
+        ) : ReConfigRequest() {
+            override val requestType: ReConfigType = ReConfigType.RESET_INCOMING
+        }
+    }
+    
+    /** Reconfiguration response parameter */
+    data class ReConfigResponse(
+        val requestType: ReConfigType,
+        val streamId: UShort = 0u,
+        val result: ReConfigResult = ReConfigResult.SUCCESS,
+        val responseSequenceNumber: UInt = 0u
     )
     
     override fun serialize(): ByteArray {
-        // 4 bytes header + 8 bytes per request
-        val length = 4 + (requests.size * 8)
+        // 4 bytes header + 8 bytes per request/response
+        val items = requests.ifEmpty { responses }
+        val length = 4 + (items.size * 8)
         val buffer = ByteBuffer.allocate(length)
         buffer.put(type.value)
         buffer.put(flags.value)
         buffer.putShort(length.toShort())
         
+        // Serialize requests
         for (req in requests) {
-            buffer.putShort(req.type.value)
+            buffer.putShort(req.requestType.value)
             buffer.putShort((8 + req.streamIds.size * 2).toShort()) // param length
             buffer.putInt(req.requestSequenceNumber.toInt())
             for (streamId in req.streamIds) {
                 buffer.putShort(streamId.toShort())
             }
+        }
+        
+        // Serialize responses
+        for (resp in responses) {
+            buffer.putShort(resp.requestType.value)
+            buffer.putShort(8.toShort()) // param length
+            buffer.putInt(resp.responseSequenceNumber.toInt())
+            buffer.putShort(resp.result.value)
+            buffer.putShort(0) // padding
         }
         
         return buffer.array()
@@ -926,6 +999,7 @@ data class NgChunk_ReConfig(
     companion object {
         fun parse(buffer: ByteBuffer, length: UShort): NgChunk_ReConfig {
             val requests = mutableListOf<ReConfigRequest>()
+            val responses = mutableListOf<ReConfigResponse>()
             var remaining = length.toInt() - 4
             
             while (remaining >= 8) {
@@ -936,17 +1010,278 @@ data class NgChunk_ReConfig(
                 val configType = ReConfigType.entries.find { it.value == reqType } 
                     ?: ReConfigType.STREAM_RESET
                 
-                val numStreams = (reqLen.toInt() - 8) / 2
-                val streamIds = mutableListOf<UShort>()
-                repeat(numStreams) {
-                    streamIds.add(buffer.getShort().toUShort())
-                }
+                // Check if this is a response (result field present) or request
+                val isResponse = reqLen.toInt() >= 10
                 
-                requests.add(ReConfigRequest(configType, streamIds, seqNum))
+                if (isResponse) {
+                    val result = ReConfigResult.entries.find { it.value == buffer.getShort().toUShort() }
+                        ?: ReConfigResult.SUCCESS
+                    buffer.getShort() // skip padding
+                    responses.add(ReConfigResponse(configType, 0u, result, seqNum))
+                } else {
+                    val numStreams = (reqLen.toInt() - 8) / 2
+                    val streamIds = mutableListOf<UShort>()
+                    repeat(numStreams) {
+                        streamIds.add(buffer.getShort().toUShort())
+                    }
+                    
+                    val request = when (configType) {
+                        ReConfigType.ADD_OUTBOUND -> ReConfigRequest.AddOutbound(streamIds, seqNum)
+                        ReConfigType.ADD_INBOUND -> ReConfigRequest.AddInbound(streamIds, seqNum)
+                        ReConfigType.STREAM_RESET -> ReConfigRequest.StreamReset(streamIds, seqNum)
+                        ReConfigType.RESET_OUTGOING -> ReConfigRequest.ResetOutgoing(streamIds, seqNum)
+                        ReConfigType.RESET_INCOMING -> ReConfigRequest.ResetIncoming(streamIds, seqNum)
+                    }
+                    requests.add(request)
+                }
                 remaining -= reqLen.toInt()
             }
             
-            return NgChunk_ReConfig(requests = requests)
+            return NgChunk_ReConfig(requests = requests, responses = responses)
+        }
+    }
+}
+
+// ============================================
+// ASCONF Chunk (RFC 5061) - Address Configuration
+// ============================================
+
+/**
+ * ASCONF Chunk - Address Configuration Change
+ * RFC 5061 Section 3.1
+ * 
+ * Allows endpoints to add, remove, or change addresses
+ * used for the association.
+ */
+data class NgChunk_Asconf(
+    override val type: ChunkType = ChunkType.ASCONF,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** Serial number for this ASCONF */
+    val serial: UInt = 0u,
+    /** Address configuration parameters */
+    val parameters: List<AsconfParameter> = emptyList()
+) : NgChunk {
+    
+    /** ASCONF Parameter Types */
+    enum class AsconfParamType(val value: UShort) {
+        ADD_IP(0x01),
+        DEL_IP(0x02),
+        SET_PRIMARY(0x03),
+        SUCCESS_INDICATION(0x04),
+        ERROR_INDICATION(0x05)
+    }
+    
+    /** ASCONF Parameter */
+    sealed class AsconfParameter {
+        abstract val paramType: AsconfParamType
+        abstract val address: String?
+        
+        data class AddIP(override val address: String) : AsconfParameter() {
+            override val paramType: AsconfParamType = AsconfParamType.ADD_IP
+        }
+        
+        data class DelIP(override val address: String) : AsconfParameter() {
+            override val paramType: AsconfParamType = AsconfParamType.DEL_IP
+        }
+        
+        data class SetPrimary(override val address: String) : AsconfParameter() {
+            override val paramType: AsconfParamType = AsconfParamType.SET_PRIMARY
+        }
+    }
+    
+    override fun serialize(): ByteArray {
+        // Calculate length: 4 (header) + 4 (serial) + parameters
+        var paramLength = 0
+        for (param in parameters) {
+            paramLength += 8 + (param.address?.length ?: 0)
+        }
+        val length = 8 + paramLength
+        
+        val buffer = ByteBuffer.allocate(length)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(length.toShort())
+        buffer.putInt(serial.toInt())
+        
+        for (param in parameters) {
+            buffer.putShort(param.paramType.value)
+            val addrLen = param.address?.length ?: 0
+            buffer.putShort((8 + addrLen).toShort())
+            // Address data would go here (IPv4/IPv6)
+            param.address?.let { buffer.put(it.toByteArray()) }
+        }
+        
+        return buffer.array()
+    }
+    
+    companion object {
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_Asconf {
+            val serial = buffer.getInt().toUInt()
+            val params = mutableListOf<AsconfParameter>()
+            var remaining = length.toInt() - 8
+            
+            while (remaining >= 8) {
+                val paramType = buffer.getShort().toUShort()
+                val paramLen = buffer.getShort().toUShort()
+                
+                val asconfType = AsconfParamType.entries.find { it.value == paramType }
+                    ?: AsconfParamType.ADD_IP
+                
+                // Parse address from parameter
+                val addrLen = paramLen.toInt() - 4
+                if (addrLen > 0) {
+                    val addrBytes = ByteArray(addrLen)
+                    buffer.get(addrBytes)
+                    val address = String(addrBytes)
+                    
+                    val param = when (asconfType) {
+                        AsconfParamType.ADD_IP -> AsconfParameter.AddIP(address)
+                        AsconfParamType.DEL_IP -> AsconfParameter.DelIP(address)
+                        AsconfParamType.SET_PRIMARY -> AsconfParameter.SetPrimary(address)
+                        else -> AsconfParameter.AddIP(address)
+                    }
+                    params.add(param)
+                }
+                remaining -= paramLen.toInt()
+            }
+            
+            return NgChunk_Asconf(serial = serial, parameters = params)
+        }
+    }
+}
+
+/**
+ * ASCONF-ACK Chunk - Address Configuration Acknowledgment
+ * RFC 5061 Section 3.2
+ */
+data class NgChunk_AsconfAck(
+    override val type: ChunkType = ChunkType.ASCONF_ACK,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** Serial number being acknowledged */
+    val serial: UInt = 0u,
+    /** Success/error indication parameters */
+    val parameters: List<AsconfResponseParameter> = emptyList()
+) : NgChunk {
+    
+    /** Response result codes */
+    enum class AsconfResult(val value: UShort) {
+        SUCCESS(0x00),
+        DENIED(0x01),
+        ERROR_BAD_SEQ(0x02),
+        ERROR_NO_EXIST(0x03)
+    }
+    
+    /** ASCONF Response Parameter */
+    data class AsconfResponseParameter(
+        val result: AsconfResult,
+        val errorCode: UShort = 0u
+    )
+    
+    override fun serialize(): ByteArray {
+        val length = 8 + (parameters.size * 8)
+        val buffer = ByteBuffer.allocate(length)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(length.toShort())
+        buffer.putInt(serial.toInt())
+        
+        for (param in parameters) {
+            buffer.putShort(param.result.value)
+            buffer.putShort(8) // param length
+            buffer.putShort(param.errorCode.toShort())
+            buffer.putShort(0) // padding
+        }
+        
+        return buffer.array()
+    }
+    
+    companion object {
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_AsconfAck {
+            val serial = buffer.getInt().toUInt()
+            val params = mutableListOf<AsconfResponseParameter>()
+            var remaining = length.toInt() - 8
+            
+            while (remaining >= 8) {
+                val resultVal = buffer.getShort().toUShort()
+                buffer.getShort() // skip length
+                val errorCode = buffer.getShort().toUShort()
+                buffer.getShort() // skip padding
+                
+                val result = AsconfResult.entries.find { it.value == resultVal }
+                    ?: AsconfResult.SUCCESS
+                params.add(AsconfResponseParameter(result, errorCode))
+                remaining -= 8
+            }
+            
+            return NgChunk_AsconfAck(serial = serial, parameters = params)
+        }
+    }
+}
+
+// ============================================
+// I_DATA Chunk (RFC 4960) - Interleaved Data
+// ============================================
+
+/**
+ * I_DATA Chunk - Interleaved Data Chunk
+ * RFC 4960 Section 3.3.10
+ * 
+ * Provides interleaving support for simultaneous ordered
+ * and unordered data delivery on the same stream.
+ */
+data class NgChunk_IData(
+    override val type: ChunkType = ChunkType.I_DATA,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** Transmission Sequence Number */
+    val tsn: UInt = 0u,
+    /** Stream ID */
+    val streamId: UShort = 0u,
+    /** Stream Sequence Number */
+    val streamSeqNum: UShort = 0u,
+    /** Payload Protocol Identifier */
+    val ppId: UInt = 0u,
+    /** User data */
+    val userData: ByteArray = ByteArray(0)
+) : NgChunk {
+    
+    override fun serialize(): ByteArray {
+        // 20 bytes header + user data
+        val length = 20 + userData.size
+        val buffer = ByteBuffer.allocate(length)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(length.toShort())
+        buffer.putInt(tsn.toInt())
+        buffer.putShort(streamId)
+        buffer.putShort(streamSeqNum)
+        buffer.putInt(ppId.toInt())
+        buffer.put(userData)
+        return buffer.array()
+    }
+    
+    companion object {
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_IData {
+            val tsn = buffer.getInt().toUInt()
+            val streamId = buffer.getShort().toUShort()
+            val streamSeqNum = buffer.getShort().toUShort()
+            val ppId = buffer.getInt().toUInt()
+            
+            val dataLen = length.toInt() - 20
+            val userData = if (dataLen > 0) {
+                val data = ByteArray(dataLen)
+                buffer.get(data)
+                data
+            } else {
+                ByteArray(0)
+            }
+            
+            return NgChunk_IData(
+                tsn = tsn,
+                streamId = streamId,
+                streamSeqNum = streamSeqNum,
+                ppId = ppId,
+                userData = userData
+            )
         }
     }
 }
