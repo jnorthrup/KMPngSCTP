@@ -65,6 +65,20 @@ sealed interface NgChunk {
     /** Serialize chunk to bytes for transmission */
     fun serialize(): ByteArray
     
+    // Type aliases for convenient pattern matching
+    typealias Data = NgChunk_Data
+    typealias Init = NgChunk_Init
+    typealias InitAck = NgChunk_InitAck
+    typealias Sack = NgChunk_Sack
+    typealias CookieEcho = NgChunk_CookieEcho
+    typealias CookieAck = NgChunk_CookieAck
+    typealias Heartbeat = NgChunk_Heartbeat
+    typealias HeartbeatAck = NgChunk_HeartbeatAck
+    typealias Shutdown = NgChunk_Shutdown
+    typealias ShutdownAck = NgChunk_ShutdownAck
+    typealias Abort = NgChunk_Abort
+    typealias Error = NgChunk_Error
+    
     companion object {
         /**
          * Parse a chunk from a ByteBuffer
@@ -183,14 +197,25 @@ sealed interface NgChunk {
             val numGapBlocks = buffer.getShort().toUShort()
             val numDupTsns = buffer.getShort().toUShort()
             
-            // Skip gap blocks and duplicate TSNs for now
-            val gapBlocksSize = numGapBlocks.toInt() * 4
-            val dupTsnsSize = numDupTsns.toInt() * 4
-            buffer.position(buffer.position() + gapBlocksSize + dupTsnsSize)
+            // Parse gap ack blocks
+            val gapBlocks = mutableListOf<Pair<UShort, UShort>>()
+            repeat(numGapBlocks.toInt()) {
+                val start = buffer.getShort().toUShort()
+                val end = buffer.getShort().toUShort()
+                gapBlocks.add(Pair(start, end))
+            }
+            
+            // Parse duplicate TSNs
+            val dupTsns = mutableListOf<UInt>()
+            repeat(numDupTsns.toInt()) {
+                dupTsns.add(buffer.getInt().toUInt())
+            }
             
             return NgChunk.Sack(
                 cumulativeTSNAck = cumAck,
-                advertisedReceiverWindowCredit = arwnd
+                advertisedReceiverWindowCredit = arwnd,
+                gapAckBlocks = gapBlocks,
+                duplicateTSNs = dupTsns
             )
         }
         
@@ -344,22 +369,40 @@ data class NgChunk_InitAck(
     }
 }
 
-/** SACK chunk - Selective Acknowledgment */
+/** SACK chunk - Selective Acknowledgment with gap ack blocks */
 data class NgChunk_Sack(
     override val type: ChunkType = ChunkType.SACK,
     override val flags: ChunkFlags = ChunkFlags.empty(),
     val cumulativeTSNAck: UInt,
-    val advertisedReceiverWindowCredit: UInt
+    val advertisedReceiverWindowCredit: UInt,
+    /** Gap ack blocks: pairs of (start offset, end offset) from cumulative ACK */
+    val gapAckBlocks: List<Pair<UShort, UShort>> = emptyList(),
+    /** Duplicate TSNs that have been received */
+    val duplicateTSNs: List<UInt> = emptyList()
 ) : NgChunk {
     override fun serialize(): ByteArray {
-        val buffer = ByteBuffer.allocate(16)
+        // 12 bytes header + 4 bytes per gap ack block + 4 bytes per duplicate TSN
+        val length = 12 + (gapAckBlocks.size * 4) + (duplicateTSNs.size * 4)
+        val buffer = ByteBuffer.allocate(length)
         buffer.put(type.value)
         buffer.put(flags.value)
-        buffer.putShort(16)
+        buffer.putShort(length.toShort())
         buffer.putInt(cumulativeTSNAck.toInt())
         buffer.putInt(advertisedReceiverWindowCredit.toInt())
-        buffer.putShort(0) // No gap ack blocks
-        buffer.putShort(0) // No duplicate TSNs
+        buffer.putShort(gapAckBlocks.size.toShort()) // Number of gap ack blocks
+        buffer.putShort(duplicateTSNs.size.toShort()) // Number of duplicate TSNs
+        
+        // Write gap ack blocks
+        for ((start, end) in gapAckBlocks) {
+            buffer.putShort(start.toShort())
+            buffer.putShort(end.toShort())
+        }
+        
+        // Write duplicate TSNs
+        for (tsn in duplicateTSNs) {
+            buffer.putInt(tsn.toInt())
+        }
+        
         return buffer.array()
     }
 }
