@@ -44,6 +44,12 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - Failure detection
 - [x] Added sendData() method with TSN assignment
 - [x] Added comprehensive CongestionControlTest.kt
+- [x] Enhanced SACK chunk with gap ack blocks (RFC 4960 Section 3.3.4)
+  - Added gapAckBlocks and duplicateTSNs fields to NgChunk_Sack
+  - Proper variable-length serialization
+  - Full round-trip parsing support
+- [x] Added SackChunkTest.kt with 5 comprehensive tests
+- [x] Added type aliases to NgChunk sealed interface
 
 ## Current Structure
 
