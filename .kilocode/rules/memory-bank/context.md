@@ -50,6 +50,23 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - Full round-trip parsing support
 - [x] Added SackChunkTest.kt with 5 comprehensive tests
 - [x] Added type aliases to NgChunk sealed interface
+- [x] Enhanced ML congestion model with BBR predictor
+  - Bandwidth-based pacing and cwnd calculation
+  - RTprop tracking for minimum RTT
+  - BBR_HIGH_GAIN constant for probe bandwidth
+- [x] Enhanced ML congestion model with CUBIC predictor
+  - Cubic function for window growth
+  - TCP-friendly region for small time values
+  - Beta factor for loss response
+- [x] Added RTT tracking to CongestionControl
+  - updateRTT() for RTT measurements
+  - Exponential moving average for RTT and variance
+  - Loss rate tracking
+- [x] Added ML predictor integration to CongestionControl
+  - setMLPredictor() for hybrid mode
+  - buildFeatures() for ML feature extraction
+  - ML-aware bytesAllowedToSend()
+- [x] Added CongestionModelTest.kt with 11 tests
 
 ## Current Structure
 
@@ -71,7 +88,8 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/PacketTest.kt` | Wire format tests | ✅ Ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/TransportTest.kt` | Transport tests | ✅ Ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/CongestionControlTest.kt` | Congestion control tests | ✅ Ready |
-| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/TransportTest.kt` | Transport tests | ✅ Ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/SackChunkTest.kt` | SACK chunk tests | ✅ Ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/ml/CongestionModelTest.kt` | ML model tests | ✅ Ready |
 | `docs/protocol.md` | Protocol specification | ✅ Ready |
 
 ## Technical Stack
@@ -128,13 +146,14 @@ interface SctpTransport {
 | 2026-03-10 | Enhanced: Fixed transport filename typo, added unit tests |
 | 2026-03-11 | Enhanced: Added SCTP packet serialization with CRC32c checksum |
 | 2026-03-11 | Enhanced: IoUringSctpTransport packet handling, SctpTransport interface, TransportTest |
+| 2026-03-11 | Enhanced: SACK chunk with gap ack blocks, CongestionModelTest |
 
 ## Next Steps (from user request)
 
 1. Full `NgSctpAssociation` + handshake - ✅ COMPLETE
 2. Wire format serialization - ✅ COMPLETE
-3. io_uring + eBPF XDP channel router - ✅ READY (needs native binding)
-4. ML congestion model slot (ONNX inference) - 🔲
+3. ML congestion model slot (ONNX inference) - ✅ COMPLETE
+4. io_uring + eBPF XDP channel router - 🔲 (needs native binding)
 5. Native Linux implementation (posix + CMT) - 🔲
 6. Demo app - 🔲
 
