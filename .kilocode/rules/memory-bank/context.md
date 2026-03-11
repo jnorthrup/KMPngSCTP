@@ -75,6 +75,12 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - AuthAlgorithm enum
   - AuthParameter types (Random, ChunkList, SharedKey)
   - AUTH chunk parsing in NgChunk.parse()
+- [x] Added AuthChunkTest.kt with 9 comprehensive tests
+  - Serialization tests for SHA1 and SHA256
+  - Parsing tests
+  - Round-trip serialization/parsing tests
+  - Algorithm enum tests
+  - 4-byte alignment verification
 
 ## Current Structure
 
