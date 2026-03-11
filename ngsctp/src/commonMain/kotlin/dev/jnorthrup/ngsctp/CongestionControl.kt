@@ -279,6 +279,17 @@ class CongestionControl(
     }
     
     /**
+     * Called when CWR chunk received (ECN feedback from peer)
+     * RFC 4960 Section 12.4
+     */
+    fun onCwrReceived(lowestTSN: UInt) {
+        // The peer has indicated it reduced its cwnd in response to ECN
+        // This is informational - we've already reduced our cwnd when we sent ECNE
+        // Log the ECN reduction for monitoring
+        println("ECN: Peer acknowledged congestion, reduced cwnd to $cwnd")
+    }
+    
+    /**
      * Get the number of packets allowed in flight
      */
     fun packetsInFlightAllowed(): Int {

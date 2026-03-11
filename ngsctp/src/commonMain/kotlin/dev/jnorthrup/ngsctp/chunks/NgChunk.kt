@@ -83,6 +83,9 @@ sealed interface NgChunk {
     typealias Auth = NgChunk_Auth
     typealias ForwardTsn = NgChunk_ForwardTsn
     typealias ShutdownComplete = NgChunk_ShutdownComplete
+    typealias Ecne = NgChunk_Ecne
+    typealias Cwr = NgChunk_Cwr
+    typealias ReConfig = NgChunk_ReConfig
     
     companion object {
         /**
@@ -113,6 +116,9 @@ sealed interface NgChunk {
                 ChunkType.SHUTDOWN_ACK -> NgChunk.ShutdownAck
                 ChunkType.SHUTDOWN_COMPLETE -> NgChunk_ShutdownComplete.parse(buffer, length)
                 ChunkType.FORWARD_TSN -> NgChunk_ForwardTsn.parse(buffer, length)
+                ChunkType.ECNE -> NgChunk_Ecne.parse(buffer, length)
+                ChunkType.CWR -> NgChunk_Cwr.parse(buffer, length)
+                ChunkType.RE_CONFIG -> NgChunk_ReConfig.parse(buffer, length)
                 ChunkType.ABORT -> parseAbort(buffer, length)
                 ChunkType.ERROR -> parseError(buffer, length)
                 else -> null  // Skip unknown chunks
@@ -807,5 +813,140 @@ enum class AuthParameterType(val value: UShort) {
     
     companion object {
         fun fromUShort(v: UShort): AuthParameterType? = entries.find { it.value == v }
+    }
+}
+
+/**
+ * ECNE chunk - Explicit Congestion Notification Echo (RFC 4960 Section 12.3)
+ * 
+ * Sent by an SCTP endpoint to its peer to indicate that it experienced
+ * congestion (ECN-capable router marked the packet with ECN-CE).
+ */
+data class NgChunk_Ecne(
+    override val type: ChunkType = ChunkType.ECNE,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** Lowest TSN that was marked with ECN-CE */
+    val lowestTSN: UInt = 0u
+) : NgChunk {
+    override fun serialize(): ByteArray {
+        val buffer = ByteBuffer.allocate(8)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(8) // Length
+        buffer.putInt(lowestTSN.toInt())
+        return buffer.array()
+    }
+    
+    companion object {
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_Ecne {
+            val lowestTSN = buffer.getInt().toUInt()
+            return NgChunk_Ecne(lowestTSN = lowestTSN)
+        }
+    }
+}
+
+/**
+ * CWR chunk - Congestion Window Reduced (RFC 4960 Section 12.4)
+ * 
+ * Sent by an SCTP endpoint to acknowledge receipt of an ECNE chunk
+ * and indicate that it has reduced its congestion window.
+ */
+data class NgChunk_Cwr(
+    override val type: ChunkType = ChunkType.CWR,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** TSN that was reported in the ECNE that caused this CWR */
+    val lowestTSN: UInt = 0u
+) : NgChunk {
+    override fun serialize(): ByteArray {
+        val buffer = ByteBuffer.allocate(8)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(8) // Length
+        buffer.putInt(lowestTSN.toInt())
+        return buffer.array()
+    }
+    
+    companion object {
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_Cwr {
+            val lowestTSN = buffer.getInt().toUInt()
+            return NgChunk_Cwr(lowestTSN = lowestTSN)
+        }
+    }
+}
+
+/**
+ * RE-CONFIG chunk - Stream Reconfiguration (RFC 6525)
+ * 
+ * Allows SCTP endpoints to dynamically add or reset streams
+ * without closing the association.
+ */
+data class NgChunk_ReConfig(
+    override val type: ChunkType = ChunkType.RE_CONFIG,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** Reconfiguration requests */
+    val requests: List<ReConfigRequest> = emptyList()
+) : NgChunk {
+    
+    /** Reconfiguration request types */
+    enum class ReConfigType(val value: UShort) {
+        ADD_OUTBOUND(0x01),
+        ADD_INBOUND(0x02),
+        STREAM_RESET(0x03),
+        RESET_OUTGOING(0x04),
+        RESET_INCOMING(0x05)
+    }
+    
+    /** Reconfiguration request parameter */
+    data class ReConfigRequest(
+        val type: ReConfigType,
+        val streamIds: List<UShort> = emptyList(),
+        val requestSequenceNumber: UInt = 0u
+    )
+    
+    override fun serialize(): ByteArray {
+        // 4 bytes header + 8 bytes per request
+        val length = 4 + (requests.size * 8)
+        val buffer = ByteBuffer.allocate(length)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(length.toShort())
+        
+        for (req in requests) {
+            buffer.putShort(req.type.value)
+            buffer.putShort((8 + req.streamIds.size * 2).toShort()) // param length
+            buffer.putInt(req.requestSequenceNumber.toInt())
+            for (streamId in req.streamIds) {
+                buffer.putShort(streamId.toShort())
+            }
+        }
+        
+        return buffer.array()
+    }
+    
+    companion object {
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_ReConfig {
+            val requests = mutableListOf<ReConfigRequest>()
+            var remaining = length.toInt() - 4
+            
+            while (remaining >= 8) {
+                val reqType = buffer.getShort().toUShort()
+                val reqLen = buffer.getShort().toUShort()
+                val seqNum = buffer.getInt().toUInt()
+                
+                val configType = ReConfigType.entries.find { it.value == reqType } 
+                    ?: ReConfigType.STREAM_RESET
+                
+                val numStreams = (reqLen.toInt() - 8) / 2
+                val streamIds = mutableListOf<UShort>()
+                repeat(numStreams) {
+                    streamIds.add(buffer.getShort().toUShort())
+                }
+                
+                requests.add(ReConfigRequest(configType, streamIds, seqNum))
+                remaining -= reqLen.toInt()
+            }
+            
+            return NgChunk_ReConfig(requests = requests)
+        }
     }
 }

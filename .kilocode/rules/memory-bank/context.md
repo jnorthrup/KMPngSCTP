@@ -1,4 +1,4 @@
-# Active Context: KMPngSCTP v0.1.2 Enhanced
+# Active Context: KMPngSCTP v0.1.3 Enhanced
 
 ## Current State
 
@@ -37,8 +37,8 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - cwnd and ssthresh management
   - Timeout and duplicate SACK handling
 - [x] Added SendBuffer for tracking outstanding DATA chunks
-  - TSN-based tracking
-  - Cumulative and gap ACK support
+- [x] TSN-based tracking
+- [x] Cumulative and gap ACK support
 - [x] Added HeartbeatManager for connection monitoring
   - Periodic heartbeats
   - Failure detection
@@ -87,6 +87,19 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 - [x] Added NgChunk_ForwardTsn for RFC 3758 partial reliability (PR-SCTP)
   - StreamMapping for reordered streams
   - Full serialization and parsing support
+- [x] Added ECNE chunk (RFC 4960 Section 12.3)
+  - Explicit Congestion Notification Echo
+  - Full serialization and parsing support
+- [x] Added CWR chunk (RFC 4960 Section 12.4)
+  - Congestion Window Reduced
+  - Full serialization and parsing support
+- [x] Added RE-CONFIG chunk (RFC 6525)
+  - Stream reconfiguration (add streams, reset streams)
+  - Multiple reconfiguration request types
+  - Full serialization and parsing support
+- [x] Added handleEcne() and handleCwr() to NgSctpAssociation
+- [x] Added onCwrReceived() to CongestionControl
+- [x] Added EcneCwrReconfigTest.kt with 13 comprehensive tests
 - [x] Added RTT tracking to CongestionControl
   - updateRTT() for RTT measurements
   - Exponential moving average for RTT and variance

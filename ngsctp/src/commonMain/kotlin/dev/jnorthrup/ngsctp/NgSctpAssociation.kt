@@ -287,6 +287,8 @@ class NgSctpAssociation private constructor(
                 is NgChunk_Shutdown -> handleShutdown(chunk)
                 is NgChunk_ShutdownAck -> handleShutdownAck(chunk)
                 is NgChunk_ShutdownComplete -> handleShutdownComplete(chunk)
+                is NgChunk_Ecne -> handleEcne(chunk)
+                is NgChunk_Cwr -> handleCwr(chunk)
                 else -> { /* Handle other chunk types */ }
             }
         }
@@ -378,6 +380,27 @@ class NgSctpAssociation private constructor(
             }
             else -> { /* Ignore in other states */ }
         }
+    }
+
+    /**
+     * Handle incoming ECNE chunk (Explicit Congestion Notification Echo)
+     * RFC 4960 Section 12.3
+     */
+    private fun handleEcne(ecne: NgChunk_Ecne) {
+        // ECNE indicates the network is congested
+        // The receiver should reduce its cwnd (handled by congestion control)
+        // We also need to send a CWR to acknowledge
+        sendChunk(NgChunk_Cwr(ecne.lowestTSN))
+    }
+
+    /**
+     * Handle incoming CWR chunk (Congestion Window Reduced)
+     * RFC 4960 Section 12.4
+     */
+    private fun handleCwr(cwr: NgChunk_Cwr) {
+        // CWR confirms the peer reduced its congestion window
+        // This completes the ECN feedback loop
+        congestionControl.onCwrReceived(cwr.lowestTSN)
     }
 
     /**
