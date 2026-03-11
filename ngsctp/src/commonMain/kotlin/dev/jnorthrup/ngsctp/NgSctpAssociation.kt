@@ -1,5 +1,6 @@
 package dev.jnorthrup.ngsctp
 
+import com.ngsctp.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
@@ -25,7 +26,8 @@ class NgSctpAssociation private constructor(
     val localPort: Int,
     val remotePort: Int,
     val localVerificationTag: UInt,
-    var remoteVerificationTag: UInt
+    var remoteVerificationTag: UInt,
+    private val transport: SctpTransport? = null
 ) : CoroutineScope by scope {
 
     private val streams = ConcurrentHashMap<Int, NgSctpStream>()
@@ -280,9 +282,8 @@ class NgSctpAssociation private constructor(
         buffer.position(8) // Position at checksum field
         buffer.putInt(checksum.toInt())
         
-        // TODO: Actually send via transport (io_uring in jvmMain, raw sockets in nativeMain)
-        // For now, log what would be sent
-        println("Would send ${chunkBytes.size} byte chunk to $remoteAddress:$remotePort")
+        // Send via io_uring transport
+        transport?.send(buffer.array(), remoteAddress)
     }
     
     /**
@@ -317,8 +318,7 @@ class NgSctpAssociation private constructor(
         while (buffer.hasRemaining()) {
             val chunk = NgChunk.parse(buffer)
             if (chunk != null) {
-                // TODO: Send to inboundChunks channel
-                println("Received chunk: ${chunk.type}")
+                inboundChunks.trySend(chunk)
             }
         }
     }

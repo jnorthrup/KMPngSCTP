@@ -1,11 +1,13 @@
 package dev.jnorthrup.ngsctp.transport
 
+import com.ngsctp.protocol.*
 import dev.jnorthrup.ngsctp.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
 import java.net.*
 import java.nio.*
+import io.netty.buffer.*
 import io.netty.buffer.*
 
 
@@ -90,14 +92,37 @@ class IoUringSctpTransport(
     }
     
     private fun parseInboundPacket(buffer: ByteBuffer, sender: SocketAddress): SctpPacket {
-        // Parse SCTP common header + chunks
-        // This would deserialize the wire format into our data structures
-        throw NotImplementedError("Wire parsing needs implementation")
+        // Parse SCTP common header
+        val header = SctpCommonHeader.parse(buffer)
+        
+        // Parse chunks
+        val chunks = mutableListOf<NgChunk>()
+        while (buffer.hasRemaining()) {
+            val chunk = NgChunk.parse(buffer)
+            if (chunk != null) {
+                chunks.add(chunk)
+            }
+        }
+        
+        return SctpPacket(
+            header = header,
+            chunks = chunks,
+            remote = TransportAddress(
+                address = sender.toString(),
+                port = header.sourcePort
+            )
+        )
     }
     
     private fun serializePacket(packet: SctpPacket, buffer: ByteBuffer) {
-        // Serialize chunks to wire format
-        throw NotImplementedError("Wire serialization needs implementation")
+        // Write common header
+        packet.header.serialize(buffer)
+        
+        // Write chunks
+        for (chunk in packet.chunks) {
+            val chunkBytes = chunk.serialize()
+            buffer.put(chunkBytes)
+        }
     }
     
     fun close() {

@@ -366,3 +366,20 @@ data class SctpMessage(
     
     override fun hashCode(): Int = userData.contentHashCode()
 }
+
+/**
+ * SCTP Packet - complete wire format with header and chunks
+ */
+data class SctpPacket(
+    val header: SctpCommonHeader,
+    val chunks: List<dev.jnorthrup.ngsctp.NgChunk>,
+    val remote: TransportAddress
+)
+
+/**
+ * SCTP Transport interface for sending/receiving packets
+ */
+interface SctpTransport {
+    suspend fun send(data: ByteArray, remote: java.net.InetSocketAddress)
+    fun receive(): Flow<ByteArray>
+}

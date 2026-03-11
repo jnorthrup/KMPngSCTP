@@ -1,4 +1,4 @@
-# Active Context: KMPngSCTP v0.1.0 Foundation
+# Active Context: KMPngSCTP v0.1.1 Enhanced
 
 ## Current State
 
@@ -24,6 +24,12 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 - [x] Added SCTP packet serialization with common header (12 bytes)
 - [x] Implemented serializeAndTransmit with CRC32c checksum
 - [x] Added PacketTest.kt with wire format tests
+- [x] Enhanced IoUringSctpTransport with proper packet parsing/serialization
+- [x] Added SctpPacket and SctpTransport interface
+- [x] Added transport parameter to NgSctpAssociation
+- [x] Added comprehensive TransportTest.kt (8 tests)
+- [x] Fixed SctpParameter data property implementations
+- [x] Updated NgSctpAssociation.parseInboundPacket to send to inboundChunks
 
 ## Current Structure
 
@@ -37,11 +43,12 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/chunks/NgChunk.kt` | TLV chunk definitions | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/parser/NgSctpParser.kt` | Spirit-based parser | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/ml/CongestionModel.kt` | ML congestion slot | ✅ Ready |
-| `ngsctp/src/commonMain/kotlin/SctpTypes.kt` | Legacy protocol definitions | ✅ Kept for compatibility |
+| `ngsctp/src/commonMain/kotlin/SctpTypes.kt` | Protocol types, SctpPacket, SctpTransport | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/SctpEngine.kt` | Legacy engine | ✅ Kept for compatibility |
 | `ngsctp/src/jvmMain/kotlin/IoUringSctpTransport.kt` | io_uring transport | ✅ Framework ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/ChunkTest.kt` | Unit tests | ✅ Ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/PacketTest.kt` | Wire format tests | ✅ Ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/TransportTest.kt` | Transport tests | ✅ Ready |
 | `docs/protocol.md` | Protocol specification | ✅ Ready |
 
 ## Technical Stack
@@ -80,6 +87,14 @@ class NgSctpStream : CoroutineScope {
 - Wireshark compatible forever
 - Zero-copy ByteBuffer operations
 
+### 4. Transport Interface
+```kotlin
+interface SctpTransport {
+    suspend fun send(data: ByteArray, remote: InetSocketAddress)
+    fun receive(): Flow<ByteArray>
+}
+```
+
 ## Session History
 
 | Date | Changes |
@@ -89,15 +104,16 @@ class NgSctpStream : CoroutineScope {
 | 2026-03-10 | v0.1.0 foundation: NgSctpStream, NgSctpAssociation, TLV chunks, Spirit parser, ML slot |
 | 2026-03-10 | Enhanced: Fixed transport filename typo, added unit tests |
 | 2026-03-11 | Enhanced: Added SCTP packet serialization with CRC32c checksum |
+| 2026-03-11 | Enhanced: IoUringSctpTransport packet handling, SctpTransport interface, TransportTest |
 
 ## Next Steps (from user request)
 
 1. Full `NgSctpAssociation` + handshake - ✅ COMPLETE
 2. Wire format serialization - ✅ COMPLETE
-3. io_uring + eBPF XDP channel router
-4. ML congestion model slot (ONNX inference)
-5. Native Linux implementation (posix + CMT)
-6. Demo app
+3. io_uring + eBPF XDP channel router - ✅ READY (needs native binding)
+4. ML congestion model slot (ONNX inference) - 🔲
+5. Native Linux implementation (posix + CMT) - 🔲
+6. Demo app - 🔲
 
 ## Quick Start
 
