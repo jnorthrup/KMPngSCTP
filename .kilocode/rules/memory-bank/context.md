@@ -1,4 +1,4 @@
-# Active Context: KMPngSCTP v0.1.1 Enhanced
+# Active Context: KMPngSCTP v0.1.2 Enhanced
 
 ## Current State
 
@@ -30,6 +30,20 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 - [x] Added comprehensive TransportTest.kt (8 tests)
 - [x] Fixed SctpParameter data property implementations
 - [x] Updated NgSctpAssociation.parseInboundPacket to send to inboundChunks
+- [x] Added server-side SCTP handshake (handleInit, handleCookieEcho)
+- [x] Added SctpServer class for accepting incoming associations
+- [x] Added CongestionControl class (RFC 4960 Section 7)
+  - Slow start, congestion avoidance, fast recovery phases
+  - cwnd and ssthresh management
+  - Timeout and duplicate SACK handling
+- [x] Added SendBuffer for tracking outstanding DATA chunks
+  - TSN-based tracking
+  - Cumulative and gap ACK support
+- [x] Added HeartbeatManager for connection monitoring
+  - Periodic heartbeats
+  - Failure detection
+- [x] Added sendData() method with TSN assignment
+- [x] Added comprehensive CongestionControlTest.kt
 
 ## Current Structure
 
@@ -40,6 +54,7 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 | `ngsctp/settings.gradle.kts` | Gradle settings | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/NgSctpAssociation.kt` | Main association entry point | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/NgSctpStream.kt` | Stream with channels | ✅ Ready |
+| `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/CongestionControl.kt` | RFC 4960 congestion control | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/chunks/NgChunk.kt` | TLV chunk definitions | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/parser/NgSctpParser.kt` | Spirit-based parser | ✅ Ready |
 | `ngsctp/src/commonMain/kotlin/dev/jnorthrup/ngsctp/ml/CongestionModel.kt` | ML congestion slot | ✅ Ready |
@@ -48,6 +63,8 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
 | `ngsctp/src/jvmMain/kotlin/IoUringSctpTransport.kt` | io_uring transport | ✅ Framework ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/ChunkTest.kt` | Unit tests | ✅ Ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/PacketTest.kt` | Wire format tests | ✅ Ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/TransportTest.kt` | Transport tests | ✅ Ready |
+| `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/CongestionControlTest.kt` | Congestion control tests | ✅ Ready |
 | `ngsctp/src/commonTest/kotlin/dev/jnorthrup/ngsctp/TransportTest.kt` | Transport tests | ✅ Ready |
 | `docs/protocol.md` | Protocol specification | ✅ Ready |
 
