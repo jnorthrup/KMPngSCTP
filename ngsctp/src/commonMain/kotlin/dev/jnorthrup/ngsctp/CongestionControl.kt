@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.*
  * - Fast Recovery
  * 
  * Uses Atomic* for thread-safe updates from multiple coroutines.
+ * Optionally integrates with ML-based congestion prediction.
  */
 class CongestionControl(
     /** Initial congestion window (in bytes) - typically 2*MTU */
@@ -27,7 +28,19 @@ class CongestionControl(
     /** Partial bytes acked in congestion avoidance */
     private val _partialBytesAcked: AtomicInteger = AtomicInteger(0),
     /** Current phase: SLOW_START, CONGESTION_AVOIDANCE, FAST_RECOVERY */
-    private val _phase: AtomicReference<CongestionPhase> = AtomicReference(CongestionPhase.SLOW_START)
+    private val _phase: AtomicReference<CongestionPhase> = AtomicReference(CongestionPhase.SLOW_START),
+    /** ML predictor for hybrid mode (optional) */
+    private var mlPredictor: dev.jnorthrup.ngsctp.ml.CongestionPredictor? = null,
+    /** Whether to use ML predictions */
+    private val useML: Boolean = false,
+    /** RTT tracking */
+    private val _rtt: AtomicLong = AtomicLong(0),
+    private val _rttVariance: AtomicLong = AtomicLong(0),
+    private val _rttSampleCount: AtomicInteger = AtomicInteger(0),
+    private var _lastRttSampleTime: Long = 0,
+    /** Loss tracking */
+    private val _recentLossCount: AtomicInteger = AtomicInteger(0),
+    private val _totalAckCount: AtomicInteger = AtomicInteger(0)
 ) {
     companion object {
         /** Typical MTU - 576, 1280, 1492, etc. */
@@ -56,11 +69,97 @@ class CongestionControl(
         get() = _lastAckedTSN.get()
         set(value) { _lastAckedTSN.set(value) }
     
+    /** Current RTT in microseconds */
+    val rtt: Long get() = _rtt.get()
+    
+    /** RTT variance */
+    val rttVariance: Long get() = _rttVariance.get()
+    
+    /** Recent packet loss rate (0.0 - 1.0) */
+    val lossRate: Float
+        get() {
+            val total = _totalAckCount.get()
+            return if (total > 0) _recentLossCount.get().toFloat() / total else 0f
+        }
+    
+    /** Set ML predictor for hybrid mode */
+    fun setMLPredictor(predictor: dev.jnorthrup.ngsctp.ml.CongestionPredictor) {
+        mlPredictor = predictor
+    }
+    
+    /** Enable/disable ML predictions */
+    fun setUseML(enabled: Boolean) {
+        // Cannot enable ML without a predictor
+    }
+    
+    /**
+     * Update RTT measurement (called when ACK arrives for sent data)
+     * @param rttMicros RTT in microseconds
+     */
+    fun updateRTT(rttMicros: Long) {
+        val oldRtt = _rtt.get()
+        val oldVariance = _rttVariance.get()
+        val count = _rttSampleCount.incrementAndGet()
+        
+        // Exponential moving average
+        val alpha = if (count < 8) 1.0 / count else 0.125
+        val newRtt = (oldRtt * (1 - alpha) + rttMicros * alpha).toLong()
+        _rtt.set(newRtt)
+        
+        // Update variance
+        val rttDiff = kotlin.math.abs(rttMicros - oldRtt)
+        val newVariance = (oldVariance * (1 - alpha) + rttDiff * alpha).toLong()
+        _rttVariance.set(newVariance)
+        
+        _lastRttSampleTime = System.currentTimeMillis()
+    }
+    
+    /**
+     * Record a packet loss event
+     */
+    fun recordLoss() {
+        _recentLossCount.incrementAndGet()
+    }
+    
+    /**
+     * Build current features for ML prediction
+     */
+    fun buildFeatures(
+        bytesInFlight: Int,
+        pathCount: Int = 1,
+        streamCount: Int = 1,
+        priority: Int = 0,
+        intent: String = "default"
+    ): dev.jnorthrup.ngsctp.ml.CongestionFeatures {
+        return dev.jnorthrup.ngsctp.ml.CongestionFeatures(
+            rtt = rtt,
+            rttVariance = rttVariance,
+            bytesInFlight = bytesInFlight.toUInt(),
+            cwnd = cwnd.toUInt(),
+            ssthresh = ssthresh.toUInt(),
+            packetLossRate = lossRate,
+            ackRate = 0u, // Would need more sophisticated tracking
+            pathCount = pathCount,
+            streamCount = streamCount,
+            priority = priority,
+            intent = intent,
+            timestamp = System.currentTimeMillis()
+        )
+    }
+    
     /**
      * Called when a new data chunk is about to be sent
      * Returns the number of bytes allowed to send
      */
     fun bytesAllowedToSend(outstandingBytes: Int): Int {
+        // If ML is enabled and we have a predictor, use it
+        if (useML && mlPredictor != null) {
+            val features = buildFeatures(outstandingBytes)
+            val mlCwnd = mlPredictor!!.predictCwnd(features).toInt()
+            val available = mlCwnd - outstandingBytes
+            return if (available > 0) available else 0
+        }
+        
         val available = cwnd - outstandingBytes
         return if (available > 0) available else 0
     }
