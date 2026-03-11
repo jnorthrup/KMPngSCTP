@@ -67,6 +67,14 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - buildFeatures() for ML feature extraction
   - ML-aware bytesAllowedToSend()
 - [x] Added CongestionModelTest.kt with 11 tests
+- [x] Fixed CongestionControl ML mode toggle
+  - Added _useML mutable field with proper getter/setter
+  - isUseMLEnabled() method
+- [x] Added SCTP AUTH chunk (RFC 4895)
+  - NgChunk_Auth with HMAC-SHA1/SHA256 support
+  - AuthAlgorithm enum
+  - AuthParameter types (Random, ChunkList, SharedKey)
+  - AUTH chunk parsing in NgChunk.parse()
 
 ## Current Structure
 
