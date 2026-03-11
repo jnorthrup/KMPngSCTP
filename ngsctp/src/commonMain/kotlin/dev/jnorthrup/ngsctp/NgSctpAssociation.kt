@@ -139,15 +139,20 @@ class NgSctpAssociation private constructor(
         /**
          * Accept an incoming connection (server-side)
          */
-        suspend fun accept(init: NgChunk_Init, remoteAddr: InetSocketAddress, cookie: ByteArray): NgSctpAssociation = coroutineScope {
+        suspend fun accept(
+            init: NgChunk_Init,
+            localAddr: InetSocketAddress,
+            remoteAddr: InetSocketAddress,
+            transport: SctpTransport? = null
+        ): NgSctpAssociation = coroutineScope {
             val localTag = generateVerificationTag()
             val assocScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
             
             NgSctpAssociation(
                 scope = assocScope,
-                localAddress = localAddress,
+                localAddress = localAddr,
                 remoteAddress = remoteAddr,
-                localPort = localPort,
+                localPort = localAddr.port,
                 remotePort = remoteAddr.port,
                 localVerificationTag = localTag,
                 remoteVerificationTag = init.initiateTag,
@@ -280,6 +285,8 @@ class NgSctpAssociation private constructor(
                 is NgChunk_Abort -> handleAbort(chunk)
                 is NgChunk_Error -> handleError(chunk)
                 is NgChunk_Shutdown -> handleShutdown(chunk)
+                is NgChunk_ShutdownAck -> handleShutdownAck(chunk)
+                is NgChunk_ShutdownComplete -> handleShutdownComplete(chunk)
                 else -> { /* Handle other chunk types */ }
             }
         }
@@ -340,6 +347,34 @@ class NgSctpAssociation private constructor(
                 state = AssociationState.SHUTDOWN_RECEIVED
                 sendChunk(NgChunk_ShutdownAck)
                 state = AssociationState.SHUTDOWN_ACK_SENT
+            }
+            else -> { /* Ignore in other states */ }
+        }
+    }
+
+    /**
+     * Handle incoming SHUTDOWN-ACK chunk (peer initiated shutdown)
+     */
+    private suspend fun handleShutdownAck(ack: NgChunk_ShutdownAck) {
+        when (state) {
+            AssociationState.SHUTDOWN_SENT -> {
+                // Send SHUTDOWN-COMPLETE
+                sendChunk(NgChunk_ShutdownComplete)
+                state = AssociationState.CLOSED
+                cancel("Shutdown complete")
+            }
+            else -> { /* Ignore in other states */ }
+        }
+    }
+
+    /**
+     * Handle incoming SHUTDOWN-COMPLETE chunk
+     */
+    private fun handleShutdownComplete(complete: NgChunk_ShutdownComplete) {
+        when (state) {
+            AssociationState.SHUTDOWN_ACK_SENT -> {
+                state = AssociationState.CLOSED
+                cancel("Shutdown complete")
             }
             else -> { /* Ignore in other states */ }
         }

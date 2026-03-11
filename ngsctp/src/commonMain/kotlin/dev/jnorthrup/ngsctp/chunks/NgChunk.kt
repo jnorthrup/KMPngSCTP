@@ -81,6 +81,8 @@ sealed interface NgChunk {
     typealias Abort = NgChunk_Abort
     typealias Error = NgChunk_Error
     typealias Auth = NgChunk_Auth
+    typealias ForwardTsn = NgChunk_ForwardTsn
+    typealias ShutdownComplete = NgChunk_ShutdownComplete
     
     companion object {
         /**
@@ -109,6 +111,8 @@ sealed interface NgChunk {
                 ChunkType.HEARTBEAT_ACK -> parseHeartbeatAck(buffer, length)
                 ChunkType.SHUTDOWN -> parseShutdown(buffer, length)
                 ChunkType.SHUTDOWN_ACK -> NgChunk.ShutdownAck
+                ChunkType.SHUTDOWN_COMPLETE -> NgChunk_ShutdownComplete.parse(buffer, length)
+                ChunkType.FORWARD_TSN -> NgChunk_ForwardTsn.parse(buffer, length)
                 ChunkType.ABORT -> parseAbort(buffer, length)
                 ChunkType.ERROR -> parseError(buffer, length)
                 else -> null  // Skip unknown chunks
@@ -495,6 +499,99 @@ data object NgChunk_ShutdownAck : NgChunk {
     
     override fun serialize(): ByteArray {
         return byteArrayOf(type.value, 0, 0, 4)
+    }
+}
+
+/** SHUTDOWN-COMPLETE chunk - RFC 4960 Section 9.2 */
+data class NgChunk_ShutdownComplete(
+    override val type: ChunkType = ChunkType.SHUTDOWN_COMPLETE,
+    override val flags: ChunkFlags = ChunkFlags.empty()
+) : NgChunk {
+    
+    companion object {
+        /** Flag: T bit - indicates peer completed shutdown */
+        const val FLAG_T_BIT = 0x01
+    }
+    
+    val hasTransportConnectionLost: Boolean 
+        get() = (flags.value and FLAG_T_BIT.toUByte()) != 0u
+    
+    override fun serialize(): ByteArray {
+        return byteArrayOf(type.value, flags.value, 0, 4)
+    }
+    
+    companion object {
+        /** Parse SHUTDOWN-COMPLETE from buffer */
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_ShutdownComplete {
+            val flags = ChunkFlags(buffer.get())
+            buffer.get() // reserved
+            buffer.get() // length high byte already handled
+            return NgChunk_ShutdownComplete(flags = flags)
+        }
+    }
+}
+
+/**
+ * FORWARD-TSN chunk - RFC 3758 Partial Reliability Extension
+ * 
+ * Used for partial reliability (PR-SCTP) to skip unacknowledged DATA chunks.
+ * Allows SCTP to "abandon" some data without waiting for retransmission.
+ */
+data class NgChunk_ForwardTsn(
+    override val type: ChunkType = ChunkType.FORWARD_TSN,
+    override val flags: ChunkFlags = ChunkFlags.empty(),
+    /** New cumulative TSN - all prior chunks are acknowledged/abandoned */
+    val cumulativeTSN: UInt,
+    /** Stream information for reordered streams */
+    val streamMappings: List<StreamMapping> = emptyList()
+) : NgChunk {
+    
+    /** Stream mapping for partial reliability */
+    data class StreamMapping(
+        val streamId: UShort,
+        val streamSequenceNumber: UShort
+    )
+    
+    override fun serialize(): ByteArray {
+        // 4 bytes header + 4 bytes per stream mapping
+        val length = 4 + (streamMappings.size * 4)
+        val buffer = ByteBuffer.allocate(length)
+        buffer.put(type.value)
+        buffer.put(flags.value)
+        buffer.putShort(length.toShort())
+        buffer.putInt(cumulativeTSN.toInt())
+        
+        for (mapping in streamMappings) {
+            buffer.putShort(mapping.streamId.toShort())
+            buffer.putShort(mapping.streamSequenceNumber.toShort())
+        }
+        
+        return buffer.array()
+    }
+    
+    companion object {
+        /** Parse FORWARD-TSN from buffer */
+        fun parse(buffer: ByteBuffer, length: UShort): NgChunk_ForwardTsn {
+            val flags = ChunkFlags(buffer.get())
+            buffer.get() // reserved
+            buffer.get() // length high byte already handled
+            val cumulativeTSN = buffer.getUInt()
+            
+            val streamMappings = mutableListOf<StreamMapping>()
+            var remaining = length.toInt() - 8
+            while (remaining >= 4) {
+                val streamId = buffer.getUShort()
+                val ssn = buffer.getUShort()
+                streamMappings.add(StreamMapping(streamId, ssn))
+                remaining -= 4
+            }
+            
+            return NgChunk_ForwardTsn(
+                flags = flags,
+                cumulativeTSN = cumulativeTSN,
+                streamMappings = streamMappings
+            )
+        }
     }
 }
 
