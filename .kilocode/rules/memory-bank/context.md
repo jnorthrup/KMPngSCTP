@@ -97,6 +97,24 @@ A pure KMP library implementing Next-generation SCTP with structured concurrency
   - Stream reconfiguration (add streams, reset streams)
   - Multiple reconfiguration request types
   - Full serialization and parsing support
+- [x] Added EcneCwrReconfigTest.kt with 13 comprehensive tests
+- [x] Added handlers in NgSctpAssociation
+  - handleEcne() - responds with CWR
+  - handleCwr() - notifies congestion control
+- [x] Added handleForwardTsn() for RFC 3758 partial reliability
+- [x] Added handleAuth() for RFC 4895 authentication
+- [x] Added handleReConfig() with sealed class for RFC 6525
+  - ADD_OUTBOUND, ADD_INBOUND, STREAM_RESET, RESET_OUTGOING, RESET_INCOMING
+- [x] Added NgChunk_Asconf (RFC 5061)
+  - Address configuration change requests
+  - ADD_IP, DEL_IP, SET_PRIMARY parameters
+- [x] Added NgChunk_AsconfAck for ASCONF acknowledgments
+- [x] Added NgChunk_IData for interleaved data (RFC 4960 Section 3.3.10)
+- [x] Added type aliases for convenient pattern matching
+- [x] Added RE-CONFIG chunk (RFC 6525)
+  - Stream reconfiguration (add streams, reset streams)
+  - Multiple reconfiguration request types
+  - Full serialization and parsing support
 - [x] Added handleEcne() and handleCwr() to NgSctpAssociation
 - [x] Added onCwrReceived() to CongestionControl
 - [x] Added EcneCwrReconfigTest.kt with 13 comprehensive tests
@@ -203,6 +221,8 @@ interface SctpTransport {
 | 2026-03-11 | Enhanced: Added SCTP packet serialization with CRC32c checksum |
 | 2026-03-11 | Enhanced: IoUringSctpTransport packet handling, SctpTransport interface, TransportTest |
 | 2026-03-11 | Enhanced: SACK chunk with gap ack blocks, CongestionModelTest |
+| 2026-03-11 | Enhanced: Added ECNE, CWR, RE-CONFIG chunks with handlers |
+| 2026-03-11 | Enhanced: Added ASCONF, ASCONF-ACK, I_DATA chunks |
 
 ## Next Steps (from user request)
 
