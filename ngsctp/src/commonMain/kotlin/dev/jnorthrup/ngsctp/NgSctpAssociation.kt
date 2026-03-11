@@ -98,11 +98,7 @@ class NgSctpAssociation private constructor(
                 initiateTag = localTag,
                 initialTSN = assoc.initialTSN,
                 numOutboundStreams = outboundStreams,
-                numInboundStreams = inboundStreams,
-                fixedParameters = listOf(
-                    SctpParameter.ForwardTSNSupported(true),
-                    SctpParameter.NegotiatedMaxInboundStreams(inboundStreams)
-                )
+                numInboundStreams = inboundStreams
             ))
 
             // Step 2: Wait for INIT-ACK with cookie
@@ -128,18 +124,19 @@ class NgSctpAssociation private constructor(
         /**
          * Accept an incoming connection (server-side)
          */
-        suspend fun accept(init: NgChunk_Init, cookie: ByteArray): NgSctpAssociation = coroutineScope {
+        suspend fun accept(init: NgChunk_Init, remoteAddr: InetSocketAddress, cookie: ByteArray): NgSctpAssociation = coroutineScope {
             val localTag = generateVerificationTag()
             val assocScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
             
             NgSctpAssociation(
                 scope = assocScope,
-                localAddress = InetSocketAddress(0),  // Filled by transport
-                remoteAddress = InetSocketAddress(0),   // Filled by transport
-                localPort = 0,
-                remotePort = 0,
+                localAddress = localAddress,
+                remoteAddress = remoteAddr,
+                localPort = localPort,
+                remotePort = remoteAddr.port,
                 localVerificationTag = localTag,
-                remoteVerificationTag = init.initiateTag
+                remoteVerificationTag = init.initiateTag,
+                transport = transport
             ).also {
                 it.outboundStreamCount = init.numInboundStreams
                 it.inboundStreamCount = init.numOutboundStreams
@@ -149,9 +146,23 @@ class NgSctpAssociation private constructor(
             }
         }
 
+        /**
+         * Create a server that listens for incoming SCTP associations
+         */
+        fun listen(
+            localAddress: InetSocketAddress,
+            transport: SctpTransport? = null
+        ): SctpServer = SctpServer(localAddress, transport)
+
+        /**
+         * Generate a random verification tag for SCTP handshake
+         */
         private fun generateVerificationTag(): UInt = 
             (Math.random() * UInt.MAX_VALUE).toUInt()
 
+        /**
+         * Generate a random initial TSN
+         */
         private fun generateTSN(): UInt = 
             (Math.random() * UInt.MAX_VALUE).toUInt()
     }
@@ -218,14 +229,86 @@ class NgSctpAssociation private constructor(
         // Process incoming chunks
         for (chunk in inboundChunks) {
             when (chunk) {
+                is NgChunk_Init -> handleInit(chunk)
+                is NgChunk_CookieEcho -> handleCookieEcho(chunk)
                 is NgChunk_Data -> deliverToStream(chunk)
                 is NgChunk_Sack -> handleSack(chunk)
                 is NgChunk_Heartbeat -> sendHeartbeatAck(chunk)
                 is NgChunk_Abort -> handleAbort(chunk)
                 is NgChunk_Error -> handleError(chunk)
+                is NgChunk_Shutdown -> handleShutdown(chunk)
                 else -> { /* Handle other chunk types */ }
             }
         }
+    }
+
+    /**
+     * Handle incoming INIT chunk (server-side)
+     */
+    private suspend fun handleInit(init: NgChunk_Init) {
+        if (state != AssociationState.CLOSED) {
+            println("Received INIT in state: $state")
+            return
+        }
+        
+        remoteVerificationTag = init.initiateTag
+        inboundStreamCount = init.numOutboundStreams
+        state = AssociationState.COOKIE_WAIT
+        
+        // Generate state cookie
+        val cookie = generateStateCookie()
+        
+        // Send INIT-ACK with cookie
+        sendChunk(NgChunk_InitAck(
+            initiateTag = localVerificationTag,
+            initialTSN = initialTSN,
+            numOutboundStreams = outboundStreamCount,
+            numInboundStreams = inboundStreamCount,
+            cookie = cookie
+        ))
+    }
+
+    /**
+     * Handle incoming COOKIE_ECHO (server-side)
+     */
+    private suspend fun handleCookieEcho(cookieEcho: NgChunk_CookieEcho) {
+        if (state != AssociationState.COOKIE_WAIT) {
+            println("Received COOKIE_ECHO in state: $state")
+            return
+        }
+        
+        state = AssociationState.ESTABLISHED
+        
+        // Send COOKIE_ACK
+        sendChunk(NgChunk_CookieAck)
+    }
+
+    /**
+     * Handle incoming SHUTDOWN chunk
+     */
+    private suspend fun handleShutdown(shutdown: NgChunk_Shutdown) {
+        when (state) {
+            AssociationState.ESTABLISHED -> {
+                state = AssociationState.SHUTDOWN_RECEIVED
+                sendChunk(NgChunk_ShutdownAck)
+                state = AssociationState.SHUTDOWN_ACK_SENT
+            }
+            AssociationState.SHUTDOWN_PENDING -> {
+                state = AssociationState.SHUTDOWN_RECEIVED
+                sendChunk(NgChunk_ShutdownAck)
+                state = AssociationState.SHUTDOWN_ACK_SENT
+            }
+            else -> { /* Ignore in other states */ }
+        }
+    }
+
+    /**
+     * Generate a state cookie for the INIT-ACK
+     */
+    private fun generateStateCookie(): ByteArray {
+        val timestamp = System.currentTimeMillis()
+        val data = "$localPort:$remotePort:$timestamp:$localVerificationTag"
+        return data.toByteArray()
     }
 
     private fun deliverToStream(data: NgChunk_Data) {
@@ -383,8 +466,116 @@ class ConnectionException(message: String) : Exception(message)
  * SCTP Parameters for INIT/INIT-ACK
  */
 sealed class SctpParameter {
-    data class ForwardTSNSupported(val supported: Boolean = true) : SctpParameter()
-    data class NegotiatedMaxInboundStreams(val streams: UShort) : SctpParameter()
-    data class NegotiatedMaxOutboundStreams(val streams: UShort) : SctpParameter()
-    data class StateCookie(val cookie: ByteArray) : SctpParameter()
+    abstract val type: ParameterType
+    abstract val data: ByteArray
+    
+    data class ForwardTSNSupported(override val data: ByteArray = byteArrayOf(0, 0, 0, 1)) : SctpParameter() {
+        override val type = ParameterType.FORWARD_TSN_SUPPORTED
+    }
+    
+    data class NegotiatedMaxInboundStreams(override val data: ByteArray) : SctpParameter() {
+        override val type = ParameterType.NEGOTIATED_MAX_INBOUND_STREAMS
+    }
+    
+    data class NegotiatedMaxOutboundStreams(override val data: ByteArray) : SctpParameter() {
+        override val type = ParameterType.NEGOTIATED_MAX_OUTBOUND_STREAMS
+    }
+    
+    data class StateCookie(override val data: ByteArray) : SctpParameter() {
+        override val type = ParameterType.STATE_COOKIE
+    }
+}
+
+/**
+ * SCTP Server for accepting incoming associations
+ * 
+ * Usage:
+ * ```
+ * val server = NgSctpAssociation.listen(InetSocketAddress(8080))
+ * launch {
+ *     for (assoc in server.associations) {
+ *         // Handle new association
+ *         val stream = assoc.openStream()
+ *     }
+ * }
+ * ```
+ */
+class SctpServer(
+    val localAddress: InetSocketAddress,
+    private val transport: SctpTransport? = null
+) : CoroutineScope by CoroutineScope(Dispatchers.Default + SupervisorJob()) {
+    
+    private val _associations = Channel<NgSctpAssociation>(Channel.BUFFERED)
+    
+    /** Flow of incoming associations */
+    val associations: Flow<NgSctpAssociation> = _associations.receiveAsFlow()
+    
+    /** Start accepting connections */
+    fun startAcceptLoop() = launch {
+        // In a real implementation, this would bind to the socket
+        // and accept incoming SCTP connections
+        // For now, this is a placeholder that demonstrates the API
+        println("SCTP Server started on ${localAddress}")
+    }
+    
+    /**
+     * Accept an incoming INIT and create association
+     * Called by transport when INIT is received
+     */
+    suspend fun acceptInit(
+        init: NgChunk_Init,
+        remoteAddress: InetSocketAddress
+    ): NgSctpAssociation {
+        val localTag = generateVerificationTag()
+        val assocScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        
+        // Generate state cookie
+        val cookie = generateStateCookie()
+        
+        val assoc = NgSctpAssociation(
+            scope = assocScope,
+            localAddress = localAddress,
+            remoteAddress = remoteAddress,
+            localPort = localAddress.port,
+            remotePort = remoteAddress.port,
+            localVerificationTag = localTag,
+            remoteVerificationTag = init.initiateTag,
+            transport = transport
+        ).apply {
+            this.outboundStreamCount = init.numInboundStreams
+            this.inboundStreamCount = init.numOutboundStreams
+            this.initialTSN = generateTSN()
+            this.nextTSN = this.initialTSN
+            this.state = AssociationState.COOKIE_WAIT
+        }
+        
+        // Send INIT-ACK
+        assoc.sendChunk(NgChunk_InitAck(
+            initiateTag = localTag,
+            initialTSN = assoc.initialTSN,
+            numOutboundStreams = init.numInboundStreams,
+            numInboundStreams = init.numOutboundStreams,
+            cookie = cookie
+        ))
+        
+        _associations.send(assoc)
+        return assoc
+    }
+    
+    private fun generateVerificationTag(): UInt = 
+        (Math.random() * UInt.MAX_VALUE).toUInt()
+    
+    private fun generateTSN(): UInt = 
+        (Math.random() * UInt.MAX_VALUE).toUInt()
+    
+    private fun generateStateCookie(): ByteArray {
+        val timestamp = System.currentTimeMillis()
+        val data = "${localAddress.port}:$timestamp:$generateVerificationTag()"
+        return data.toByteArray()
+    }
+    
+    /** Close the server */
+    fun close() {
+        cancel("Server closed")
+    }
 }
