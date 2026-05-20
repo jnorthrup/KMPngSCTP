@@ -7,7 +7,7 @@ Original SCTP glory (multi-homing, message streams, PR-SCTP) + original-QUIC spi
 No UDP tax. No hidden ACKs. Hardware-offload friendly. SmartNIC / io_uring / eBPF first-class.
 
 ## Why this instead of QUIC?
-See the 20-year war we both lived through. This fixes the parsing disaster, the CPU tax, the observability black hole, and adds ML congestion + native collectives.
+See the 20-year quic war we lived through. This fixes the parsing disaster, the CPU tax, the observability black hole, and adds ML congestion + native collectives.
 
 ## Features (v0.1)
 - TLV chunks everywhere (unknown = skip, Wireshark happy forever)
